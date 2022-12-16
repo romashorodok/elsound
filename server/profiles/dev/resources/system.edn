@@ -1,0 +1,3 @@
+{:platform.system.server/jetty {:host  #or [#env HOST "0.0.0.0"]
+                                :port  #or [#env PORT 8000]
+                                :join? false}}

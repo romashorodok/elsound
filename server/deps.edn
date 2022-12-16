@@ -1,0 +1,23 @@
+{:paths ["src" "resources"]
+
+ :deps {org.clojure/clojure {:mvn/version "1.11.1"}
+
+        org.slf4j/slf4j-log4j12 {:mvn/version "1.7.32"}
+        org.slf4j/slf4j-api     {:mvn/version "1.7.32"}
+        
+        aero/aero {:mvn/version "1.1.6"}
+
+        ring/ring               {:mvn/version "1.9.5"}
+        ring/ring-json          {:mvn/version "0.5.1"}
+        ring/ring-jetty-adapter {:mvn/version "1.9.4"}
+        ring/ring-defaults      {:mvn/version "0.3.3"}
+        compojure/compojure     {:mvn/version "1.7.0"}}
+ :aliases
+ {:dev {:extra-deps  {com.lambdaisland/classpath {:mvn/version "0.0.27"}
+                      fs/fs                      {:mvn/version "1.3.3"}
+                      integrant/repl             {:mvn/version "0.3.2"}}
+        :extra-paths ["profiles/dev/"]}
+  
+  :cider {:extra-deps {nrepl/nrepl       {:mvn/version "0.9.0"}
+                       cider/cider-nrepl {:mvn/version "0.28.3"}}
+          :main-opts  ["-m" "nrepl.cmdline" "--middleware" "[cider.nrepl/cider-middleware]" "-i"]}}}

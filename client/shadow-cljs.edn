@@ -1,0 +1,17 @@
+{:deps {:aliases [:dev :nrepl]}
+ 
+ :build-defaults {:compiler-options {:parallel-build true}}
+ 
+ :builds
+ {:app
+  {:target           :react-native
+   :init-fn          client.core/init!
+   :closure-defines  {goog.DEBUG true}
+   :compiler-options {:optimizations :none
+                      :source-map    true
+                      :infer-externs true}
+   :output-dir       "app"
+   :devtools         {:autoload true
+                      :preloads [shadow.expo.keep-awake]}}}
+ 
+ :nrepl {:init-ns user}}

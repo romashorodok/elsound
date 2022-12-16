@@ -1,0 +1,10 @@
+.expo
+.shadow-cljs
+.cpcache
+.nrepl-port
+app
+
+node_modules
+package-lock.json
+yarn-error.log
+yarn.lock
