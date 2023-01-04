@@ -2,6 +2,7 @@
 .shadow-cljs
 .cpcache
 .nrepl-port
+.DS_STORE
 app
 
 node_modules

@@ -36,7 +36,7 @@
   (let [config "resources/system.edn"]
     (set-prep! (fn []
                  (let [config (-> (read-config config :dev)
-                                   (dissoc :profile))]
+                                  (dissoc :profile))]
                    (ig/load-namespaces config)
                    (ig/prep config))))))
 
