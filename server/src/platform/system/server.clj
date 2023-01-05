@@ -1,5 +1,5 @@
 (ns platform.system.server
-  (:refer-clojure :exclude [range])
+  (:refer-clojure :exclude [range chunk])
   (:require [integrant.core :as ig]
             [ring.adapter.jetty :as jetty]
             [compojure.core :as compojure]
@@ -55,11 +55,12 @@
 (defn ^Content-Range content-range [{:keys [unit range-start range-end size]}]
   (->Content-Range unit range-start range-end size))
 
-(defn partial-content-response [^Content-Range range body]
+(defn partial-content-response [chunk-length ^Content-Range range body]
   (-> (r/response body)
       (r/header "Content-Range" (->header range))
-      (r/header "Content-Length" (:range-end range))
+      (r/header "Content-Length" chunk-length)
       (r/header "Accept-Ranges" (:unit range))
+      (r/header "Connection" "close")
       (r/status 206)))
 
 (defn get-chunk [file-size chunk-size chunk-start]
@@ -69,12 +70,16 @@
         (+ chunk-end end-diff))
       chunk-end)))
 
+;; NOTE: when use audio tag in chrome. It's stop audio when it's fully loaded.
+;; It's may be resolved by disabling audio preload 
 (defn stream-music [{:keys [range-header]}]
-  (let [file-size   (get-size (get-file filename))
-        chunk-size  (quot file-size 100)
-        chunk-start (:range-start range-header)
-        chunk-end   (get-chunk file-size chunk-size chunk-start)]
+  (let [file-size    (get-size (get-file filename))
+        chunk-size   (quot file-size 100)
+        chunk-start  (:range-start range-header)
+        chunk-end    (get-chunk file-size chunk-size chunk-start)
+        chunk-length (- chunk-end chunk-start)]
     (partial-content-response
+      chunk-length
       (content-range {:unit        (:unit range-header)
                       :range-start chunk-start
                       :range-end   chunk-end
