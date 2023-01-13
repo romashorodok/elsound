@@ -28,7 +28,7 @@
     (+ chunk overflow-diff)))
 
 (defn- default-chuk-size [file-size]
-  (quot file-size 100))
+  (quot file-size 8))
 
 (defn range-reader [file-path ^Range {:keys [range-start range-end unit]}]
   (let [file       (io/file file-path)

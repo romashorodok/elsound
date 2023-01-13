@@ -13,10 +13,14 @@
   (:import [platform.system.header.range Range]))
 
 (def filename
-  "test.mp3")
+  ;; "test.mp3"
+  )
 
 (def filepath
   (io/file (io/file (str (System/getProperty "user.dir") "/" filename))))
+
+;; TODO: Calculate audio duration.
+;; https://stackoverflow.com/a/20716463
 
 ;; NOTE: when use audio tag in chrome. It's stop audio when it's fully loaded.
 ;; It's may be resolved by disabling audio preload 
@@ -29,6 +33,29 @@
 
 (compojure/defroutes app-routes
   (compojure/context "/music" _ music-routes))
+
+(def cors-headers
+  {"Access-Control-Allow-Origin"      "*"
+   "Access-Control-Allow-Methods"     "GET, POST, PUT, DELETE, OPTIONS"
+   "Access-Control-Allow-Headers"     "*"
+   "Access-Control-Allow-Credentials" "true"
+   "Access-Control-Expose-Headers"    "Range,Content-Range"})
+
+(defn preflight? [request]
+  (= (request :request-method) :options))
+
+(defn wrap-cors [handler]
+  (fn [request]
+    (try
+      
+      (if (preflight? request)
+        {:status  200
+         :headers cors-headers
+         :body "test"}
+        (-> (handler request)
+            (update-in [:headers] merge cors-headers)))
+      (catch Exception e
+        (prn e)))))
 
 (defn wrap-not-found [handler]
   (fn [request]
@@ -44,6 +71,7 @@
       wrap-not-found
       wrap-json-response
       wrap-range-header
+      wrap-cors
       (wrap-json-body {:keywords? true})))
 
 (defmethod ig/init-key ::jetty [_ {:keys [handler] :as config}]
