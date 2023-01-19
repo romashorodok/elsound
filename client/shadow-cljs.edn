@@ -1,17 +1,27 @@
-{:deps {:aliases [:dev :nrepl]}
+{:deps {:aliases [:dev]}
  
- :build-defaults {:compiler-options {:parallel-build true}}
+ :build-defaults
+ {:compiler-options {:parallel-build     true
+                     :output-feature-set :es2020}}
  
  :builds
- {:app
-  {:target           :react-native
-   :init-fn          client.core/init!
-   :closure-defines  {goog.DEBUG true}
-   :compiler-options {:optimizations :none
-                      :source-map    true
-                      :infer-externs true}
-   :output-dir       "app"
-   :devtools         {:autoload true
-                      :preloads [shadow.expo.keep-awake]}}}
+ {:app {:target :browser
+
+        :output-dir "resources/public/js"
+        :asset-path "/js"
+        
+        :module-loader true
+        :modules       {:core {:init-fn client.core/init!}}
+
+        :devtools {:watch-dir "resources/public"
+                   :http-root "resources/public"
+                   :http-port 4200
+                   :preloads  [devtools.preload]}
+        
+        :closure-defines {goog.DEBUG true}
+        
+        :compiler-options {:optimizations :none
+                           :source-map    true
+                           :infer-externs true}}}
  
  :nrepl {:init-ns user}}

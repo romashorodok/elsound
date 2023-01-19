@@ -1,0 +1,18 @@
+@import "./mixin.scss";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+.do-not-do-this {
+  transition: 1s;
+  transform: rotate(20deg);
+}
+
+a {
+  transform: scale(0.5);
+}
+
+.a {
+  transition: 1s; /* will be prefixed */
+}

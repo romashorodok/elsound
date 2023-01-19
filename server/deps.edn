@@ -19,5 +19,5 @@
         :extra-paths ["profiles/dev/"]}
   
   :cider {:extra-deps {nrepl/nrepl       {:mvn/version "0.9.0"}
-                       cider/cider-nrepl {:mvn/version "0.28.3"}}
+                       cider/cider-nrepl {:mvn/version "0.29.0"}}
           :main-opts  ["-m" "nrepl.cmdline" "--middleware" "[cider.nrepl/cider-middleware]" "-i"]}}}

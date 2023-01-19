@@ -1,0 +1,12 @@
+
+@mixin transition {
+    transition: 1s;
+    
+    &:hover {
+        transform: rotate(20deg);
+    }
+}
+
+.test-transition {
+    @include transition;
+}
