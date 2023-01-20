@@ -1,8 +1,7 @@
 /** @type {import('tailwindcss').Config} */
 module.exports = {
   content: [
-    "./resources/public/index.html",
-    "./resources/public/js/core.js"
+    "./resources/public/js/cljs-runtime/@(client)*.js"
   ],
   theme: {
     extend: {},
