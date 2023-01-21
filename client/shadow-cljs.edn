@@ -2,6 +2,7 @@
  
  :build-defaults
  {:compiler-options {:parallel-build     true
+                     :infer-externs      :auto
                      :output-feature-set :es2020}}
  
  :builds
