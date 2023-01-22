@@ -24,6 +24,10 @@
 
 (def stream "http://localhost:8000/music/stream")
 
+;; NOTE: is it butter for meta data? But need make it like record
+#:byte{:start 0}
+#:timestamp{:start 0}
+
 (defrecord MetaData
     [byte-start
      byte-end
@@ -69,13 +73,12 @@
                         :buffer  (.arrayBuffer %)))))
 
 (defn timestamp->buffered-range [buffer timestamp]
-  (let [run?   (cljs.core/atom true)
+  (let [run?    (cljs.core/atom true)
         ?result (cljs.core/atom nil)
         length  (-> buffer .-buffered .-length)]
     (dorun
       (for [idx    (range length)
-            :while (or @run?
-                       (> idx ))
+            :while @run?
             :let   [start (-> buffer .-buffered (.start idx - 1))
                     end (-> buffer .-buffered (.end idx - 1))]]
         (when (and (>= timestamp start)
@@ -86,59 +89,148 @@
 
 
 (defprotocol Store
-  (consume [this data])
-  (keep-sorted [this])
   (append [this data]))
 
 (defprotocol IRangeMetaData
-  (-consumed-ranges-lookup [this meta-data]))
+  (lookup-range [this {:keys [start end]}])
+  (consume-ranges-for [this {:keys [start end]}])
+
+  (latest-range [_ ranges range])
+  (earlies-range [_ ranges range])
+
+  (union-ranges [this range])
+  (add-range [thid range]))
+
+
+;; NOTE: Should be better naming for that ?
+(defn consume-start? [[_ range?] requested-range]
+  (<= (:timestamp-start range?) (:end requested-range)))
+(defn consume-end? [[_ range?] requested-range]
+  (>= (:timestamp-end range?) (:start requested-range)))
+
+
+(defn latest-range? [[_ range?] target-range]
+  (<= (:end target-range) (:timestamp-end range?) ))
+
+(defn earlies-range? [[_ range?] target-range]
+  (>= (:start target-range) (:timestamp-start range?)))
+
+(defn from-earlies-latest->range [earlies latest]
+  {:byte-start      (:byte-start earlies),
+   :byte-end        (:byte-end latest),
+   :timestamp-start (:timestamp-start earlies),
+   :timestamp-end   (:timestamp-end latest)})
 
 (deftype RangeMetaDataStore [store]
   IRangeMetaData
-  (-consumed-ranges-lookup [this ^MetaData meta-data]
-    (tap> meta-data))
+  (lookup-range [this {:keys [start end]}]
+    (let [run?    (cljs.core/atom true)
+          ?result (cljs.core/atom nil)
+          store   @store]
+      (dorun
+        (for [idx    (range (count store))
+              :while @run?
+              :let   [range? (get-in store [idx])
+                      timestamp-start (:timestamp-start range?)
+                      timestamp-end (:timestamp-end range?)]]
+          (when (and (>= start timestamp-start)
+                     (<= end timestamp-end))
+            (reset! ?result (assoc range? :index idx))
+            (reset! run? false))))
+      @?result))
+
+  (union-ranges [_ {:keys [start end] :as range}]
+    (->> @store
+         (filter #(consume-start? % range))
+         (filter #(consume-end? % range))
+         (into {})))
+
+  (latest-range [_ ranges range]
+    (->> ranges
+         (filter #(latest-range? %  range))
+         first
+         next
+         (into {})))
+  
+  (earlies-range [_ ranges range]
+    (->> ranges
+         (filter #(earlies-range? % range))
+         first
+         next
+         (into {})))
+  
+  (add-range [this range]
+    ;; TODO: Keep sorted when append
+    (append this range)
+    
+    (let [range {:start (:timestamp-start range) :end (:timestamp-end range)} 
+          union (union-ranges this range)]
+      (when (> (count union) 1)
+        (let [latest  (latest-range this union range)
+              earlies (earlies-range this union range)
+              unified (from-earlies-latest->range earlies latest)]
+          
+          (swap! store
+                 (fn [state]
+                   (let [ids           (keys union)
+                         pure          (apply dissoc state ids)
+                         nil-ids-items (mapv
+                                         (fn [[_ val]]
+                                           {nil val})
+                                         (cons [nil unified] (seq pure)))
+                         sorted-items  (sort-by
+                                         (fn [item]
+                                           (get-in item [nil :timestamp-start]) )
+                                         nil-ids-items)]
+
+
+                     (into {}
+                           (map-indexed
+                             (fn [idx item]
+                               {idx (get-in item [nil])})
+                             sorted-items))
+                     
+                     )))))))
   
   Store
-  (consume [this ^MetaData meta-data]
-    )
   (append [_ ^MetaData meta-data]
     (let [idx (count @store)]
       (swap! store conj {idx meta-data})))
-  (keep-sorted [_]
-    )
   
   IDeref
   (-deref [_] store))
 
-(defn seeking [player media last-content-range]
-  (.pause @player)
-  (let [source-buffer     (first (.-sourceBuffers media))
-        timestamp-persent (* 100 (/ (.-currentTime @player)
-                                    (.-duration @player)))
-        ;; TODO make global audio size
-        request-chunk     (-> (* (/ (-> @last-content-range
-                                        :size)
-                                    100)
-                                 timestamp-persent)
-                              js/Math.floor)
-        ?playing-range    (timestamp->buffered-range
-                            source-buffer
-                            (.-currentTime @player))]
+(defn seeking [player media last-content-range store]
+  (let [source-buffer           (first (.-sourceBuffers media))
+        ?buffered-playing-range (timestamp->buffered-range
+                                  source-buffer
+                                  (.-currentTime @player))]
     
-    (.abort source-buffer)
-    (set! (.-timestampOffset source-buffer)
-          (.-currentTime @player))
-
-    (go
-      (let [range-req  (str "bytes=" request-chunk "-")
-            resp       (<p! (fetch-buffer
-                              {:url    stream
-                               :header {:range range-req}}))
-            buffer-end (-> resp :content-range :end)]
-        
-        (reset! last-content-range (:content-range resp))
-        (set! (.-appendWindowEnd source-buffer) buffer-end)
-        (.appendBuffer source-buffer (<p! (:buffer resp)))))))
+    ;; (if ?buffered-playing-range
+    ;;   (let []
+    ;;     ;; Check if range in store.
+    ;;     ;; If there, request last chunk by it meta data
+    ;;     ))
+      
+    (let [timestamp-persent (* 100 (/ (.-currentTime @player)
+                                      (.-duration @player)))
+          request-chunk     (-> (* (/ (-> @last-content-range
+                                          :size)
+                                      100)
+                                   timestamp-persent)
+                                js/Math.floor)]
+      (.abort source-buffer)
+      (set! (.-timestampOffset source-buffer) (.-currentTime @player))
+      (go
+        (let [range-req  (str "bytes=" request-chunk "-")
+              resp       (<p! (fetch-buffer
+                                {:url    stream
+                                 :header {:range range-req}}))
+              buffer-end (-> resp :content-range :end)]
+          
+          (reset! last-content-range (:content-range resp))
+          (set! (.-appendWindowEnd source-buffer) buffer-end)
+          (.appendBuffer source-buffer (<p! (:buffer resp))))))))
 
 (defn MediaSource [player {:keys [type duration]
                            :or   {type "audio/mpeg" duration 144}}]
@@ -174,21 +266,19 @@
                                playing-range           (timestamp->buffered-range
                                                          source-buffer
                                                          (.-currentTime @player))]
+                           (add-range store
+                                      (map->MetaData
+                                        {:byte-start      (:start content-range)
+                                         :byte-end        (:end content-range)
+                                         :timestamp-start (:start playing-range)
+                                         :timestamp-end   (:end playing-range)}))
 
-                           (if false
-                             (tap> "Check if ranges same by index in store. If not range was merged")
-                             (append store
-                                     (map->MetaData
-                                       {:byte-start      (:start content-range)
-                                        :byte-end        (:end content-range)
-                                        :timestamp-start (:start playing-range)
-                                        :timestamp-end   (:end playing-range)})))
-                           
-                           ;; (tap> @@store)
-                           )))
+                           (tap> @@store))))
 
-
-    (subscribe-option! player :seeking #(seeking player media last-content-range))
+    (subscribe-option! player :seeking
+                       #(do
+                          (.pause @player)
+                          (seeking player media last-content-range store)))
     
     (r/create-class
       {:component-did-mount
@@ -204,6 +294,57 @@
   (let [time (-> event .-target .-value parse-long)]
     (set! (.-currentTime player) time)))
 
+;; TODO: make it better
+(defn draw-canvas [-player -canvas -ctx]
+  (let [player   @-player
+        canvas   @-canvas
+        ctx      @-ctx
+        duration (.-duration player)
+        buffer   (.-buffered player)
+        length   (.-length buffer)
+        width    (.-width canvas)
+        height   (.-height canvas)]
+    (set! (.-fillStyle ctx) "#000")
+    (.fillRect ctx 0 0 width height)
+    (set! (.-fillStyle ctx) "#d00")
+    
+    (dorun 
+      (for [idx  (range length)
+            :let [start (* (/ (.start buffer idx) duration) width)
+                  end   (* (/ (.end buffer idx) duration) width)]]
+        (.fillRect ctx start 0 (- end start) height)))
+
+    (set! (.-fillStyle ctx) "#fff")
+    
+    (set! (.-textBaseLine ctx) "top")
+    (set! (.-textAlign ctx) "left")
+    (.fillText ctx  (.toFixed (.-currentTime player) 1) 10 15)
+
+    (set! (.-textAlign ctx) "right")
+    (.fillText ctx (.toFixed duration) (- width 10) 15)
+
+    (.beginPath ctx)
+    (.arc ctx
+          (* width (/ (.-currentTime player) duration))
+          (* height 0.5)
+          7
+          0
+          (* 2 js/Math.PI))
+    (.fill ctx)
+    
+    (js/setTimeout #(draw-canvas -player -canvas -ctx) 29)))
+
+(defn PlayerCanvas [player]
+  (let [ref (cljs.core/atom nil)
+        ctx (cljs.core/atom nil)]
+    (add-watch ref :canvas-ref #(reset! ctx (if @ref
+                                              (.getContext @ref "2d")
+                                              nil)))
+
+    (subscribe-option! player :progress #(draw-canvas player ref ctx))
+    
+    [:canvas {:width 300 :height 30 :ref #(reset! ref %)}]))
+
 (defn PlayerControl [player]
   (r/with-let [timestamp (r/atom 0)]
     
@@ -215,6 +356,7 @@
              :max          144
              :step         1
              :value        @timestamp
+             :style        {:width 300 :height 30}
              :on-change    #(reset! timestamp (-> % .-target .-value))
              :on-mouse-up  #(player-change-time @player %)
              :on-touch-end #(player-change-time @player %)}]))
@@ -226,9 +368,9 @@
        (when @audio
          [:<>
           [:audio {:controls true :ref #(reset! player %)}
-           [MediaSource player]]])
-       
-       [PlayerControl player]
+           [MediaSource player]]
+          [PlayerCanvas player]
+          [PlayerControl player]])
        
        [:button {:on-click #(swap! audio not)} "Change audio"]])))
 
