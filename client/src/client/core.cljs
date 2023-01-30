@@ -1,256 +1,39 @@
 (ns client.core
-  (:refer-clojure :exclude [get])
   (:require
    [reagent.core :as r]
    [reagent.dom :as rd]
-   [goog.object :refer [get]]
+   [re-frame.core :as rf]
    ["react-dom/client" :refer [createRoot]]
    [clojure.string :as s]
    [cljs.core.async :refer [go]]
    [cljs.core.async.interop :refer-macros [<p!]]
-   [client.util.subscription :as subscription]))
-
-(defn destruct [o]
-  (reify
-    ILookup
-    (-lookup [_ k]
-      (get o (name k)))
-    (-lookup [_ k not-found]
-      (get o (name k) not-found))))
-
-;; Utils 
+   [client.util.subscription :as subscription]
+   [client.util.destruct :refer [destruct]]
+   [client.components.player.core.metadata-buffer :as mbuffer]
+   [client.components.player.events :as player.events]
+   [client.components.player.core.metadata-buffer :refer [lookup-in]]
+   [client.components.player.utils :refer [buffered-timestamp?
+                                           timestamp-percent]]
+   [client.util.event :as util.event]))
 
 (defonce watch-print #(js/console.log (clj->js %)))
 (defonce root (createRoot (js/document.getElementById "root")))
 
 (def stream "http://localhost:8000/music/stream")
 
-;; NOTE: is it butter for meta data? But need make it like record
-#:byte{:start 0}
-#:timestamp{:start 0}
-
-(defrecord MetaData
-    [byte-start
-     byte-end
-     timestamp-start
-     timestamp-end])
-
 (defn unmount-source-buffer [media buffer]
   (when buffer
     (.removeSourceBuffer media buffer)))
 
-(defn header->content-range [resp]
-  (when-let [content-range (-> resp .-headers (.get "content-range"))]
-    (let [range-meta       (s/split content-range " ")
-          ranges-with-size (s/split (first (rest range-meta)) "/")
-          ranges           (s/split (first ranges-with-size) "-")]
-      {:unit  (first range-meta)
-       :start (parse-long (first ranges))
-       :end   (parse-long (last ranges))
-       :size  (parse-long (last ranges-with-size))})))
-
-(defn fetch-buffer [{:keys [url header]}]
-  (-> (js/fetch url (clj->js {:headers header}))
-      (.then #(hash-map :content-range (header->content-range %)
-                        :buffer  (.arrayBuffer %)))))
-
-(defn timestamp->buffered-range [buffer timestamp]
-  (let [run?    (cljs.core/atom true)
-        ?result (cljs.core/atom nil)
-        length  (-> buffer .-buffered .-length)]
-    (dorun
-      (for [idx    (range length)
-            :while @run?
-            :let   [start (-> buffer .-buffered (.start idx - 1))
-                    end (-> buffer .-buffered (.end idx - 1))]]
-        (when (and (>= timestamp start)
-                   (<= timestamp end))
-          (reset! ?result {:start start :end end :index idx})
-          (reset! run? false))))
-    @?result))
-
-
-(defprotocol Store
-  (-append [this data]))
-
-(defprotocol IRangeMetaData
-  (lookup-range [this {:keys [start end]}])
-  (consume-ranges-for [this {:keys [start end]}])
-
-  (latest-range [_ ranges range])
-  (earlies-range [_ ranges range])
-
-  (union-ranges [this range])
-  (add-range [thid range])
-  (keep-sorted [this]))
-
-
-;; NOTE: Should be better naming for that ?
-(defn consume-start? [[_ range?] requested-range]
-  (<= (:timestamp-start range?) (:end requested-range)))
-(defn consume-end? [[_ range?] requested-range]
-  (>= (:timestamp-end range?) (:start requested-range)))
-
-
-(defn latest-range? [[_ range?] target-range]
-  (<= (:end target-range) (:timestamp-end range?) ))
-
-(defn earlies-range? [[_ range?] target-range]
-  (>= (:start target-range) (:timestamp-start range?)))
-
-(defn from-earlies-latest->range [earlies latest]
-  {:byte-start      (:byte-start earlies),
-   :byte-end        (:byte-end latest),
-   :timestamp-start (:timestamp-start earlies),
-   :timestamp-end   (:timestamp-end latest)})
-
-(deftype RangeMetaDataStore [store]
-  IRangeMetaData
-  (lookup-range [this {:keys [start end]}]
-    (let [run?    (cljs.core/atom true)
-          ?result (cljs.core/atom nil)
-          store   @store]
-      (dorun
-        (for [idx    (range (count store))
-              :while @run?
-              :let   [range? (get-in store [idx])
-                      timestamp-start (:timestamp-start range?)
-                      timestamp-end (:timestamp-end range?)]]
-          (when (and (>= start timestamp-start)
-                     (<= end timestamp-end))
-            (reset! ?result (assoc range? :index idx))
-            (reset! run? false))))
-      @?result))
-
-  (union-ranges [_ {:keys [start end] :as range}]
-    (->> @store
-         (filter #(consume-start? % range))
-         (filter #(consume-end? % range))
-         (into {})))
-
-  (latest-range [_ ranges range]
-    (->> ranges
-         (filter #(latest-range? %  range))
-         first
-         next
-         (into {})))
-  
-  (earlies-range [_ ranges range]
-    (->> ranges
-         (filter #(earlies-range? % range))
-         first
-         next
-         (into {})))
-
-  (keep-sorted [this]
-    (let [state         @store
-          nil-ids-items (mapv (fn [[_ val]] {nil val}) state)
-          sort-items    #(sort-by (fn [item]
-                                    (get-in item [nil :timestamp-start])) %)
-          index-items   #(map-indexed (fn [idx item]
-                                        {idx (get-in item [nil])}) %)]
-      (swap! store #(into {} (-> nil-ids-items
-                                 sort-items
-                                 index-items)))))
-  
-  (add-range [this range]
-    (-append this range)
-    
-    (let [range {:start (:timestamp-start range) :end (:timestamp-end range)} 
-          union (union-ranges this range)]
-      (if (> (count union) 1)
-        (let [latest  (latest-range this union range)
-              earlies (earlies-range this union range)
-              unified (from-earlies-latest->range earlies latest)]
-          (swap! store
-                 (fn [state]
-                   (let [ids           (keys union)
-                         pure          (apply dissoc state ids)
-                         nil-ids-items (mapv
-                                         (fn [[_ val]]
-                                           {nil val})
-                                         (cons [nil unified] (seq pure)))
-                         sorted-items  (sort-by
-                                         (fn [item]
-                                           (get-in item [nil :timestamp-start]) )
-                                         nil-ids-items)]
-                     (into {} (map-indexed
-                                (fn [idx item]
-                                  {idx (get-in item [nil])})
-                                sorted-items))))))
-        (keep-sorted this))))
-  
-  Store
-  (-append [_ ^MetaData meta-data]
-    (let [idx (count @store)]
-      (swap! store conj {idx meta-data})))
-  
-  IDeref
-  (-deref [_] store))
-
-(defn request? [percent]
-  (let [request-on 95]
-    (>= percent request-on)))
-
-(defn range-percent [current-time {:keys [start end]}]
-  (/ (* 100 (- current-time start))
-     (- end start)))
-
-(defn seeking [player media last-content-range store]
-  (let [source-buffer           (first (.-sourceBuffers @media))
-        ?buffered-playing-range (timestamp->buffered-range
-                                  source-buffer
-                                  (.-currentTime @player))]
-    
-    (if ?buffered-playing-range
-      (if-let [range (lookup-range store ?buffered-playing-range)]
-        (let [range-percent (range-percent (.-currentTime @player)
-                                           {:start (:timestamp-start range)
-                                            :end   (:timestamp-end range)})]
-          (.abort source-buffer)
-          (when (request? range-percent)
-            (set! (.-timestampOffset source-buffer)
-                  (:timestamp-end range))
-            (go
-              (let [range-header (str "bytes=" (inc (:byte-end range)) "-")
-                    resp         (<p! (fetch-buffer
-                                        {:url    stream
-                                         :header {:range range-header}}))
-                    buffer-end   (-> resp :content-range :end)]
-                (reset! last-content-range (:content-range resp))
-                (set! (.-appendWindowEnd source-buffer) buffer-end)
-                (.appendBuffer source-buffer (<p! (:buffer resp)))))))
-        (ex-info "Inconsistent store and buffer on end of chunk request"
-                 {:store    @@store
-                  :buffered ?buffered-playing-range
-                  :stored   range}))
-      (let [timestamp-percent (* 100 (/ (.-currentTime @player)
-                                        (.-duration @player)))
-            request-chunk     (-> (* (/ (-> @last-content-range
-                                            :size)
-                                        100)
-                                     timestamp-percent)
-                                  js/Math.floor)]
-        (.abort source-buffer)
-        (set! (.-timestampOffset source-buffer) (.-currentTime @player))
-        (go
-          (let [range-req  (str "bytes=" request-chunk "-")
-                resp       (<p! (fetch-buffer
-                                  {:url    stream
-                                   :header {:range range-req}}))
-                buffer-end (-> resp :content-range :end)]
-            
-            (reset! last-content-range (:content-range resp))
-            (set! (.-appendWindowEnd source-buffer) buffer-end)
-            (.appendBuffer source-buffer (<p! (:buffer resp)))))))))
-
 (defn MediaSource [player {:keys [type duration]
                            :or   {type "audio/mpeg" duration 144}}]
-  (let [store              (RangeMetaDataStore. (atom {}))
+  (let [metadataBuffer     (mbuffer/MetaDataBuffer. (atom {}))
         media              (cljs.core/atom nil)
         source-ref         (cljs.core/atom nil)
         source-buffer      (cljs.core/atom nil)
         last-content-range (cljs.core/atom nil)]
+
+    (rf/dispatch-sync [::util.event/assoc-in [:player :stream] "http://localhost:8000/music/stream"])
     
     (subscription/subscribe-atom
       media
@@ -260,77 +43,34 @@
               -source-buffer  (.addSourceBuffer media type)]
           (reset! source-buffer -source-buffer)
           (set! (.-duration media) duration)
-          
-          (go
-            (let [resp       (<p! (fetch-buffer {:url    stream
-                                                 :header {:range "bytes=0-"}}))
-                  buffer-end (-> resp :content-range :end)]
-              (reset! last-content-range (:content-range resp))
-              (set! (.-appendWindowEnd -source-buffer) buffer-end)
-              (.appendBuffer -source-buffer (<p! (:buffer resp)))))))
+          (rf/dispatch-sync [::util.event/assoc-in [:player :meta-data-buffer] metadataBuffer])
+          (rf/dispatch-sync [::util.event/assoc-in [:player :source-buffer] -source-buffer])
+          (rf/dispatch-sync [::util.event/assoc-in [:player :ref] @player])
+          (rf/dispatch-sync [::player.events/range-seeked])))
       #js{:once true})
-    
-    (subscription/subscribe-atom
-      source-buffer
-      :update
-      (fn [e]
-        (let [{source-buffer :target} (destruct e)
-              content-range           @last-content-range
-              playing-range           (timestamp->buffered-range
-                                        source-buffer
-                                        (.-currentTime @player))]
-          (add-range store
-                     (map->MetaData
-                       {:byte-start      (:start content-range)
-                        :byte-end        (:end content-range)
-                        :timestamp-start (:start playing-range)
-                        :timestamp-end   (:end playing-range)}))
-          
-          (tap> @@store))))
 
     (subscription/subscribe-atom
       player
       :timeupdate
-      (fn fetch-next [event]
-        (comment
-          ;; Example of how to unsubscribe
-          (subscription/unsubscribe @player :timeupdate fetch-next))
-        
-        
-        ;; NOTE: Does it good case for channels use ? Or workers ? Or both ?
-        (let [source-buffer           @source-buffer
-              ?buffered-playing-range (timestamp->buffered-range
-                                        source-buffer
-                                        (.-currentTime @player))]
-          (if-let [range (lookup-range store ?buffered-playing-range)]
-            (when (not= (:timestamp-end range) (.-duration @player))
-              (let [range-percent (range-percent (.-currentTime @player)
-                                                 {:start (:timestamp-start range)
-                                                  :end   (:timestamp-end range)})]
-                (.abort source-buffer)
-                (when (request? range-percent)
-                  (set! (.-timestampOffset source-buffer)
-                        (:timestamp-end range))
-                  (go
-                    (let [range-header (str "bytes=" (inc (:byte-end range)) "-")
-                          resp         (<p! (fetch-buffer
-                                              {:url    stream
-                                               :header {:range range-header}}))
-                          buffer-end   (-> resp :content-range :end)]
-                      (reset! last-content-range (:content-range resp))
-                      (set! (.-appendWindowEnd source-buffer) buffer-end)
-                      (.appendBuffer source-buffer (<p! (:buffer resp))))))))
-            (ex-info "Inconsistent store and buffer on end of chunk request"
-                     {:store    @@store
-                      :buffered ?buffered-playing-range
-                      :stored   range})))))
+      (fn []
+        (let [duration     (.-duration @player)
+              current-time (.-currentTime @player)
+              ?buffered    (buffered-timestamp? @source-buffer current-time)
+              ?meta-data   (lookup-in metadataBuffer [:timestamp] ?buffered)]
+          (when (and ?meta-data
+                     (not= (-> ?meta-data :timestamp :end) duration))
+            (let [start          (-> ?meta-data :timestamp :start)
+                  end            (-> ?meta-data :timestamp :end)
+                  played-percent (timestamp-percent current-time start end)]
+              (when (>= played-percent 80)
+                (rf/dispatch [::player.events/range-seeked])))))))
     
     (subscription/subscribe-atom
       player
       :seeking
       (fn []
         (.pause @player)
-        (seeking player media last-content-range store)))
+        (rf/dispatch-sync [::player.events/range-seeked])))
 
     (r/create-class
       {:component-did-mount

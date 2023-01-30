@@ -17,9 +17,11 @@
         :devtools {:watch-dir "resources/public"
                    :http-root "resources/public"
                    :http-port 4200
-                   :preloads  [devtools.preload]}
+                   :preloads  [devtools.preload
+                               day8.re-frame-10x.preload]}
         
-        :closure-defines {goog.DEBUG true}
+        :closure-defines {re-frame.trace.trace-enabled?        true
+                          day8.re-frame.tracing.trace-enabled? true}
         
         :compiler-options {:optimizations :none
                            :source-map    true
