@@ -14,6 +14,12 @@
       (assoc-in context [:coeffects :player] player))))
 
 (rf/reg-cofx
+  ::audio-context
+  (fn [context]
+    (let [player (get-in context [:db :player :audio-context])]
+      (assoc-in context [:coeffects :audio-context] player))))
+
+(rf/reg-cofx
   ::meta-data-buffer
   (fn [context]
     (let [meta-data-buffer (get-in context [:db :player :meta-data-buffer])]

@@ -28,7 +28,7 @@
     (+ chunk overflow-diff)))
 
 (defn- default-chuk-size [file-size]
-  (quot file-size 8))
+  (quot file-size 10))
 
 (defn range-reader [file-path ^Range {:keys [range-start range-end unit]}]
   (let [file       (io/file file-path)
@@ -39,11 +39,15 @@
       (chunk-start [_] range-start)
       ;; TODO: case when range-end passed
       (chunk-end [this]
-        (let [end (+ (chunk-start this) chunk-size)]
-          (if (overflow? end file-size)
-            (normalize-overflow-chunk end file-size)
-            end)))
-      (chunk-length [this] (- (chunk-end this) range-start))
+        range-end
+        ;; (let [end (+ (chunk-start this) chunk-size)]
+        ;;   (if (overflow? end file-size)
+        ;;     (normalize-overflow-chunk end file-size)
+        ;;     end))
+        )
+      (chunk-length [this]
+        (prn (chunk-end this) (chunk-start this) )
+        (- (chunk-end this) range-start))
 
       MetaFile
       (file-size [_] file-size)
@@ -52,6 +56,9 @@
       (unit [_] unit)
       (read->bytes [this]
         (with-open [reader (io/input-stream file)]
+          (prn (chunk-end this) (chunk-start this) )
+          
+          
           (.skip reader (chunk-start this))
           (.readNBytes reader (+ 1 (- (chunk-end this)
                                       (chunk-start this)))))))))

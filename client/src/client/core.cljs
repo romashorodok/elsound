@@ -26,7 +26,15 @@
     (.removeSourceBuffer media buffer)))
 
 (defn MediaSource [player {:keys [type duration]
-                           :or   {type "audio/mpeg" duration 144}}]
+                           :or   {type
+                                  ;; "audio/mp4;codecs=mp4a.40.2"
+                                  ;; "audio/mpeg"
+                                  "audio/webm;codecs=opus"
+
+                                  duration
+                                  144
+                                  ;; 3024
+                                  }}]
   (let [metadataBuffer     (mbuffer/MetaDataBuffer. (atom {}))
         media              (cljs.core/atom nil)
         source-ref         (cljs.core/atom nil)
@@ -40,13 +48,39 @@
       :sourceopen
       (fn [e]
         (let [{media :target} (destruct e)
-              -source-buffer  (.addSourceBuffer media type)]
+              -source-buffer  (.addSourceBuffer media type)
+              ;; buffer-source (.createBufferSource audio-context)
+              audio-context   (js/AudioContext.)
+              buffer-source   (.createBufferSource audio-context)]
+          
           (reset! source-buffer -source-buffer)
-          (set! (.-duration media) duration)
+          ;; (set! (.-duration media) duration)
+          
+          ;; (set! (.-mode -source-buffer) "sequence")
+
+          (set! (.-buffer buffer-source) (.-buffer -source-buffer))
+          (.connect buffer-source (.-destination audio-context))
+
+          ;; (set! (.-buffer buffer-source) (.-buffer -source-buffer))
+          
+
+          ;; (.connect buffer-source (.-destination audio-context))
+          ;; (tap> @player)
+
+          ;; (.connect @player buffer-source)
+          
+          ;; Segment need to be audio consequent
+          ;; If not sourceBuffer will not play
+          ;; (set! (.-mode -source-buffer) "segments")
+          ;; (rf/dispatch-sync [::player.events/init-player @player])
+          
           (rf/dispatch-sync [::util.event/assoc-in [:player :meta-data-buffer] metadataBuffer])
           (rf/dispatch-sync [::util.event/assoc-in [:player :source-buffer] -source-buffer])
           (rf/dispatch-sync [::util.event/assoc-in [:player :ref] @player])
-          (rf/dispatch-sync [::player.events/range-seeked])))
+          (rf/dispatch-sync [::util.event/assoc-in [:player :audio-context] audio-context])
+          (rf/dispatch-sync [::player.events/range-seeked])
+          
+          ))
       #js{:once true})
 
     (subscription/subscribe-atom
@@ -57,6 +91,8 @@
               current-time (.-currentTime @player)
               ?buffered    (buffered-timestamp? @source-buffer current-time)
               ?meta-data   (lookup-in metadataBuffer [:timestamp] ?buffered)]
+          ;; (tap> @media)
+          
           (when (and ?meta-data
                      (not= (-> ?meta-data :timestamp :end) duration))
             (let [start          (-> ?meta-data :timestamp :start)
@@ -154,7 +190,8 @@
     
     [:input {:type         :range
              :min          0
-             :max          144
+             :max 3024
+             ;; 144
              :step         1
              :value        @timestamp
              :style        {:width 300 :height 30}
@@ -164,7 +201,7 @@
 
 (defn Player []
   (r/with-let [audio (r/atom true)]
-    (let [player         (cljs.core/atom nil)]
+    (let [player (cljs.core/atom nil)]
       [:<>
        (when @audio
          [:<>

@@ -17,8 +17,15 @@
         range-end   (if (or (= range-end "*")
                             (nil? range-end))
                       :all
-                      range-end)]
+                      (parse-long range-end))]
     (->Range unit range-start range-end)))
+
+(defn range-segment [^String segment-str]
+  (let [sides (clojure.string/split segment-str #"-")]
+    (range {:unit        "bytes"
+            :range-start (first sides)
+            :range-end   (first (next sides))})))
+
 
 (def default-range
   {:unit        "bytes"

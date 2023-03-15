@@ -7,6 +7,8 @@
         
         aero/aero {:mvn/version "1.1.6"}
 
+        io.lindstrom/mpd-parser {:mvn/version "0.9"}
+
         ring/ring               {:mvn/version "1.9.5"}
         ring/ring-json          {:mvn/version "0.5.1"}
         ring/ring-jetty-adapter {:mvn/version "1.9.4"}
